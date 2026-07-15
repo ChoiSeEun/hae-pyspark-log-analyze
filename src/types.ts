@@ -25,6 +25,7 @@ export interface AnalysisResponse {
   correctedCode?: string; // Complete corrected code snippet
   explanation?: string; // Detailed breakdown of fixes and precautions
   schemaAnalysis?: string; // Evaluation of columns/types compared to selected table schema
+  customerReply?: string; // [추가] 최종 고객 전달용 답변 템플릿 (Support answer for customer)
 }
 
 export interface HistoryItem {

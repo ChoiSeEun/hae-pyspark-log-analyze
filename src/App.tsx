@@ -21,7 +21,7 @@ import Header from "./components/Header";
 import SampleLoader from "./components/SampleLoader";
 import SchemaManager from "./components/SchemaManager";
 import DiffViewer from "./components/DiffViewer";
-import ChatHelper from "./components/ChatHelper";
+import ChatHelper, { ChatMessage } from "./components/ChatHelper";
 import { TableSchema, AnalysisResponse, HistoryItem } from "./types";
 
 export default function App() {
@@ -38,6 +38,15 @@ export default function App() {
   
   // Active analysis results
   const [results, setResults] = useState<AnalysisResponse | null>(null);
+
+  // Lifted ChatMessages state for the primary chatbot interface
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "init",
+      sender: "bot",
+      text: "차량 커넥티드 데이터 플랫폼 관제 지원 챗봇입니다! 🚗💨\n\n왼쪽 입력란에 에러 로그와 코드를 입력해 분석을 가동하시거나, 이 채팅창에 에러 로그를 직접 붙여넣고 해결책을 물어보세요.\n\n에러가 발생하면 원인을 즉시 파악하고, 고객에게 곧장 전송할 수 있는 **[공손한 티켓 답변 템플릿]**을 정성껏 마련해 드립니다!"
+    }
+  ]);
   
   // Modals and sidebars visibility
   const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false);
@@ -45,6 +54,14 @@ export default function App() {
   
   // Persisted local troubleshooting histories
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyReply = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Fetch corporate schemas on mount
   useEffect(() => {
@@ -131,6 +148,25 @@ export default function App() {
       const data: AnalysisResponse = await response.json();
       setResults(data);
 
+      // Inject the analysis request & response directly into the chatbot stream!
+      const userMessageText = `[폼 분석 요청] 다음 PySpark 에러의 원인과 조치를 검증해 주세요.\n\n* 테이블: ${selectedTable ? selectedTable.name : "미지정"}\n* 에러 로그: ${errorLog.slice(0, 180)}...\n* 분석할 코드:\n\`\`\`python\n${code || "# 코드 없이 에러 분석"}\n\`\`\``;
+      
+      const botMessageText = `### 🔍 에러 정밀 분석 완료\n\n**요약**: ${data.errorSummary}\n\n**원인 및 해결 제언**:\n${data.explanation}\n\n**교정 코드**:\n\`\`\`python\n${data.correctedCode}\n\`\`\`\n\n[CUSTOMER_REPLY]\n${data.customerReply || ""}\n[/CUSTOMER_REPLY]`;
+
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `user-anal-${Date.now()}`,
+          sender: "user",
+          text: userMessageText
+        },
+        {
+          id: `bot-anal-${Date.now() + 1}`,
+          sender: "bot",
+          text: botMessageText
+        }
+      ]);
+
       // Save into durable history
       const newHistoryItem: HistoryItem = {
         id: Date.now().toString(),
@@ -159,6 +195,25 @@ export default function App() {
     setResults(item.response);
     setApiError("");
     setIsHistoryOpen(false);
+
+    // Sync loaded history directly into the chatbot stream
+    const sTable = schemas.find(s => s.id === item.referenceTableId);
+    const userMessageText = `[히스토리 복원] 다음 사건의 이전 분석 기록을 가져옵니다:\n\n* 대상 테이블: ${sTable ? sTable.name : "미지정"}\n* 에러 요약: ${item.response.errorSummary}`;
+    const botMessageText = `### 🔍 복원된 에러 분석 기록\n\n**에러 요약**: ${item.response.errorSummary}\n\n**원인 및 해결안**:\n${item.response.explanation}\n\n**교정 코드**:\n\`\`\`python\n${item.response.correctedCode}\n\`\`\`\n\n[CUSTOMER_REPLY]\n${item.response.customerReply || ""}\n[/CUSTOMER_REPLY]`;
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `user-hist-${Date.now()}`,
+        sender: "user",
+        text: userMessageText
+      },
+      {
+        id: `bot-hist-${Date.now() + 1}`,
+        sender: "bot",
+        text: botMessageText
+      }
+    ]);
   };
 
   const handleClearHistory = () => {
@@ -421,9 +476,40 @@ export default function App() {
           {/* Right Panel: Resolution Outputs */}
           <div className="flex-1 flex flex-col space-y-5">
             
+            {/* Always Prominent AI Chatbot at the very top of the right panel */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between pl-1">
+                <span className="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
+                  <HelpCircle className="h-4 w-4 text-blue-400" />
+                  <span>실시간 PySpark 디버깅 & 센서 분석 챗봇</span>
+                </span>
+                <span className="text-[9px] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full font-mono uppercase font-bold tracking-wide">
+                  Always Active
+                </span>
+              </div>
+              <ChatHelper 
+                messages={chatMessages}
+                setMessages={setChatMessages}
+                contextData={{
+                  errorSummary: results?.errorSummary || "대기 중",
+                  originalCode: code,
+                  correctedCode: results?.correctedCode || "",
+                  explanation: results?.explanation || "",
+                  referenceTableId: selectedTableId
+                }}
+              />
+            </div>
+
+            {/* Separator / Title for Analysis Section */}
+            <div className="border-t border-[#2D313E] pt-3">
+              <span className="text-[10px] font-bold text-slate-400 pl-1 block uppercase tracking-wider">
+                정량 분석 진단 결과 및 발송 피드백
+              </span>
+            </div>
+
             {/* Loading Overlay State */}
             {isAnalyzing ? (
-              <div className="bg-[#161922] border border-[#2D313E] rounded-lg p-8 shadow-sm flex flex-col items-center justify-center text-center h-full min-h-[450px]">
+              <div className="bg-[#161922] border border-[#2D313E] rounded-lg p-8 shadow-sm flex flex-col items-center justify-center text-center h-full min-h-[350px]">
                 <div className="relative flex items-center justify-center mb-6">
                   <div className="h-14 w-14 rounded-full border-4 border-blue-900/40 border-t-blue-500 animate-spin"></div>
                   <Terminal className="h-5 w-5 text-blue-400 absolute" />
@@ -449,6 +535,43 @@ export default function App() {
               /* Success / Remedy Outputs */
               <div className="space-y-5 animate-in fade-in duration-200">
                 
+                {/* 0. 최종 고객 답변 템플릿 (Admin 최우선 순위 결과물) */}
+                <div className="bg-[#11141D] border-2 border-blue-500/40 rounded-lg p-5 shadow-lg relative overflow-hidden">
+                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-indigo-500"></div>
+                  <div className="flex items-center justify-between border-b border-[#2D313E] pb-3 mb-4">
+                    <div className="flex items-center space-x-2">
+                      <Sparkles className="h-4.5 w-4.5 text-blue-400" />
+                      <span className="font-display font-bold text-xs text-white uppercase tracking-wider">
+                        💌 최종 고객 발송용 답변 템플릿 (Support Response Template)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyReply(results.customerReply || "")}
+                      className="bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold px-3 py-1.5 rounded transition flex items-center space-x-1 cursor-pointer"
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-300" />
+                          <span className="text-emerald-300">복사 완료</span>
+                        </>
+                      ) : (
+                        <>
+                          <Layers className="h-3 w-3" />
+                          <span>전체 복사</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  
+                  <div className="bg-[#161922] border border-[#2D313E] rounded p-4 font-sans text-xs text-slate-200 leading-relaxed whitespace-pre-wrap select-text max-h-[350px] overflow-y-auto">
+                    {results.customerReply || "답변 템플릿을 생성하지 못했습니다."}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2.5 font-mono text-right">
+                    * 이 텍스트를 복사하여 고객 문의(Ticket) 답변 양식에 붙여넣어 즉시 사용할 수 있습니다.
+                  </p>
+                </div>
+
                 {/* Status Flag Banner */}
                 {results.isInfrastructureError ? (
                   <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 flex items-start space-x-3">
@@ -510,42 +633,28 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5. Interactive Chat Helper (Context-Aware Chatbot) */}
-                <div className="space-y-2.5">
-                  <span className="text-xs font-semibold text-slate-300 pl-1">교정 코드에 대한 AI 추가 질의</span>
-                  <ChatHelper 
-                    contextData={{
-                      errorSummary: results.errorSummary,
-                      originalCode: code,
-                      correctedCode: results.correctedCode,
-                      explanation: results.explanation,
-                      referenceTableId: selectedTableId
-                    }}
-                  />
-                </div>
-
               </div>
             ) : (
               /* Empty Standby State Card */
-              <div className="bg-[#161922] border border-[#2D313E] rounded-lg p-8 shadow-sm flex flex-col items-center justify-center text-center h-full min-h-[450px]">
-                <div className="h-14 w-14 bg-[#1A1D27] text-blue-400 rounded-lg flex items-center justify-center mb-4 border border-[#2D313E] shadow-sm">
-                  <Terminal className="h-6 w-6 stroke-1.5" />
+              <div className="bg-[#161922] border border-[#2D313E] rounded-lg p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[250px]">
+                <div className="h-12 w-12 bg-[#1A1D27] text-blue-400 rounded-lg flex items-center justify-center mb-4 border border-[#2D313E] shadow-sm">
+                  <Terminal className="h-5 w-5 stroke-1.5" />
                 </div>
                 <h3 className="font-display font-bold text-xs uppercase tracking-wider text-white">
                   실시간 원인 교정 대기 중
                 </h3>
-                <p className="text-xs text-slate-400 mt-2 max-w-sm leading-relaxed">
-                  아직 분석이 수행되지 않았습니다. 왼쪽 창의 입력란에 에러 로그를 기록하고 <strong>[분석하기]</strong>를 클릭해 즉각 분석을 수행하거나 아래의 <strong>테스트용 에러 템플릿</strong>을 가동해 보십시오.
+                <p className="text-[11px] text-slate-400 mt-2 max-w-sm leading-relaxed">
+                  아직 원격 정량 분석이 수행되지 않았습니다. 왼쪽 창에서 에러 코드와 스펙을 로딩한 후 <strong>[에러 원인 분석 & 해결책 생성]</strong> 버튼을 클릭하십시오. 관리자 전용 답변 템플릿과 정밀 기술진단 데이터가 이곳에 표시됩니다.
                 </p>
                 
                 <div className="grid grid-cols-2 gap-4 max-w-md w-full mt-6 border-t border-[#2D313E] pt-5">
                   <div className="text-left bg-[#11141D] p-3 rounded border border-[#2D313E]">
                     <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider">1단계 정적 진단</span>
-                    <p className="text-[10.5px] text-slate-400 mt-1 leading-snug">인프라 OOM 및 환경 기인성 결함 즉각 식별 피드백</p>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">인프라 OOM 및 환경 기인성 결함 즉각 식별 피드백</p>
                   </div>
                   <div className="text-left bg-[#11141D] p-3 rounded border border-[#2D313E]">
                     <span className="text-[9px] font-bold text-blue-400 uppercase tracking-wider">2단계 앵커 매치</span>
-                    <p className="text-[10.5px] text-slate-400 mt-1 leading-snug">사전 등록된 실제 사내 테이블 스키마 대조를 통한 완벽 디버깅</p>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-snug">사전 등록된 실제 차량 센서 스키마 대조를 통한 완벽 디버깅</p>
                   </div>
                 </div>
               </div>

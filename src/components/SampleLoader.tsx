@@ -15,63 +15,58 @@ interface SampleCase {
 
 const SAMPLE_CASES: SampleCase[] = [
   {
-    title: "컬럼명 오타 & 스키마 불일치",
+    title: "특정 차종 센서 신호 부재 오류",
     badge: "AnalysisException",
     badgeColor: "bg-red-500/10 text-red-400 border-red-500/30",
-    tableId: "sales_transactions",
+    tableId: "vehicle_telemetry_raw",
     icon: <Database className="h-4 w-4" />,
-    description: "테이블에 없는 'tracs_date' 컬럼을 groupBy로 참조하려다 스키마 파싱에 실패한 에러",
-    code: `df = spark.read.table("sales_transactions")
+    description: "순수 전기차(IONIQ5, EV6) 등의 주행 이력을 필터링하면서 해당 차종에 존재하지 않는 'engine_rpm' 신호를 조회/가공하려다 스키마 정합성이 어긋난 에러",
+    code: `df = spark.read.table("vehicle_telemetry_raw")
 
-# 'transaction_date'를 'tracs_date'로 오타 입력함
-daily_sales = df.groupBy("tracs_date") \\
-                .sum("quantity") \\
-                .withColumnRenamed("sum(quantity)", "total_qty")
+# 순수 전기차(Pure EV) 주행 데이터 추출 필터
+ev_df = df.filter("model_name IN ('IONIQ5', 'EV6')")
 
-daily_sales.show(5)`,
-    errorLog: `org.apache.spark.sql.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column or function parameter with name \`tracs_date\` cannot be resolved. Did you mean one of the following? [\`transaction_date\`, \`transaction_id\`, \`payment_method\`]`
+# 전기차에는 존재하지 않는 'engine_rpm' 컬럼을 평균내려고 시도하여 예외 발생
+ev_summary = ev_df.groupBy("model_name") \\
+                   .agg({"engine_rpm": "avg", "ev_battery_soc": "avg"})
+
+ev_summary.show()`,
+    errorLog: `org.apache.spark.sql.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column or function parameter with name \`engine_rpm\` cannot be resolved for selected Electric Vehicle models or the underlying table structure. Did you mean one of the following? [\`ev_battery_soc\`, \`speed_kph\`, \`gear_position\`, \`steering_angle_deg\`]`
   },
   {
-    title: "잘못된 데이터 형식 연산 시도",
-    badge: "TypeError",
+    title: "ADAS 센서 신호명 오타",
+    badge: "AnalysisException",
     badgeColor: "bg-blue-500/10 text-blue-400 border-blue-500/30",
-    tableId: "user_profiles",
+    tableId: "vehicle_adas_events",
     icon: <FileCode className="h-4 w-4" />,
-    description: "정수형 age 컬럼에 형변환 없이 문자열 '1'을 더하다가 Python 인터프리터 수준에서 발생한 에러",
-    code: `from pyspark.sql.functions import col
+    description: "ADAS 주행 이벤트 테이블에서 조향 토크 컬럼명 'steering_torque_nm'을 'st_torque_nm'으로 잘못 입력하여 발생한 스키마 분석 예외",
+    code: `df = spark.read.table("vehicle_adas_events")
 
-df = spark.read.table("user_profiles")
+# 조향 토크(steering_torque_nm) 컬럼명을 'st_torque_nm'으로 오타 발생
+torque_stats = df.groupBy("adas_feature") \\
+                 .min("st_torque_nm") \\
+                 .withColumnRenamed("min(st_torque_nm)", "min_torque")
 
-# age(정수형) 컬럼에 문자열 "1"을 더하여 발생한 연산 오류
-# (PySpark Column 연산에서는 cast가 동반되거나 정수를 더해야 함)
-df_filtered = df.withColumn("next_age", col("age") + "1")
-df_filtered.select("user_id", "age", "next_age").show(5)`,
-    errorLog: `TypeError: Unsupported operand type(s) for +: 'Column' and 'str'
-at pyspark.sql.column.Column.__add__(column.py:115)
-at <stdin> in <module> line 6`
+torque_stats.show()`,
+    errorLog: `org.apache.spark.sql.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column or function parameter with name \`st_torque_nm\` cannot be resolved. Did you mean one of the following? [\`steering_torque_nm\`, \`vehicle_id\`, \`timestamp\`, \`adas_feature\`]`
   },
   {
-    title: "클러스터 리소스 / 메모리 한계 초과",
-    badge: "Infrastructure",
+    title: "블랙박스 이미지 로그 OOM",
+    badge: "OutOfMemory",
     badgeColor: "bg-amber-500/10 text-amber-400 border-amber-500/30",
-    tableId: "sales_transactions",
+    tableId: "vehicle_telemetry_raw",
     icon: <Cpu className="h-4 w-4" />,
-    description: "드라이버 메모리 리밋을 고려하지 않고 거대 대용량 테이블에 collect()를 호출해 YARN/GC가 강제 종료한 에러",
-    code: `# 수억 건의 데이터셋을 싱글 노드 드라이버 메모리로 전부 덤프 시도
-df = spark.read.table("sales_transactions")
+    description: "차량별 테라바이트급 고해상도 수집 이벤트를 분산 처리하지 않고 드라이버 단일 메모리로 무리하게 collect()를 감행하여 자바 힙 공간이 부족해 터진 인프라성 에러",
+    code: `# 수천만 대 차량의 실시간 정밀 센서 원시 시퀀스 전체를 로드
+raw_telemetry = spark.read.table("vehicle_telemetry_raw")
 
-# 분산 저장이 권장되는 상황에서 드라이버 수집 강행
-huge_result = df.collect()`,
+# 분산 집계 또는 필터링 없이 100GB가 넘는 로우 데이터를 한 번에 로컬 메모리로 덤프 호출
+local_data = raw_telemetry.collect()`,
     errorLog: `java.lang.OutOfMemoryError: Java heap space
   at java.util.Arrays.copyOf(Arrays.java:3332)
-  at java.io.ByteArrayOutputStream.write(ByteArrayOutputStream.java:123)
-  at org.apache.spark.util.Utils$.writeByteBuffer(Utils.scala:212)
   at org.apache.spark.serializer.KryoSerializerInstance.serialize(KryoSerializer.scala:180)
   at org.apache.spark.executor.Executor$TaskRunner.run(Executor.scala:412)
-  at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.stats:1149)
-  at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
-  at java.lang.Thread.run(Thread.java:748)
-WARN TaskSetManager: Lost task 0.0 in stage 3.0 (TID 12, cluster-executor-1): java.lang.OutOfMemoryError: Java heap space`
+WARN TaskSetManager: Lost task 0.0 in stage 1.0 (TID 5, vehicle-cluster-executor-2): java.lang.OutOfMemoryError: Java heap space`
   }
 ];
 
