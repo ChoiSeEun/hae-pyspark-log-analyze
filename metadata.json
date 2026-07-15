@@ -1,0 +1,6 @@
+{
+  "name": "PySpark 에러 슈팅 어시스턴트",
+  "description": "PySpark 코드 에러를 신속하고 정확하게 진단하고 해결 방안과 교정 코드를 제시하는 에러 슈팅 어시스턴트입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
